@@ -50,28 +50,9 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
 %        intervals using a soft threshold at the median observed IEI.
 %     6. Combine: score = regularity * magnitude_score.
 %     7. Look up the combined score at each event location.
-%
-%   Notes:
-%     - Normalized convolution prevents bias from boundary pixels and
-%       sparse regions where many neighbors have no data. The concept is
-%       described in Knutsson & Westin (1993), "Normalized and Differential
-%       Convolution," Proc. IEEE CVPR, pp. 515-523.
-%     - The coefficient of variation is a unitless measure of relative
-%       dispersion. See Abdi, H. (2010), "Coefficient of Variation," in
-%       Encyclopedia of Research Design, SAGE Publications.
-%     - Pixels with fewer than 2 observed neighbors in the kernel are
-%       assigned a score of 0 (insufficient data for a meaningful CV).
-%
-%   Example:
-%     % Given persistent iei_map, current frame events, and imgSz:
-%     [scores, cv, reg] = coherence.findSimilarities( ...
-%         sorted_x, sorted_y, iei_map, [640,480], 4);
-%
-%   See also imgaussfilt, imfilter, fspecial, accumarray
 
-    % ----------------------------------------------------------------
-    % 0. Input validation
-    % ----------------------------------------------------------------
+
+    % Validate input
     if nargin < 5
         radius = 4;
     end
@@ -83,9 +64,7 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     % Cast to double for numerical stability in variance computation
     iei = double(iei_map);
 
-    % ----------------------------------------------------------------
-    % 1. Build observation mask and convolution kernel
-    % ----------------------------------------------------------------
+    % Build observation mask and convolution kernel
     % Mask: 1 where we have IEI data, 0 elsewhere
     obs_mask = double(iei > 0);
 
@@ -95,12 +74,8 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     % Binary disk for counting observed neighbors (unweighted)
     count_kernel = double(fspecial('disk', radius) > 0);
 
-    % ----------------------------------------------------------------
-    % 2. Normalized convolution for local IEI statistics
-    % ----------------------------------------------------------------
-    % Only observed pixels contribute to the local statistics.
-    % This is critical: without masking, zero-valued (unobserved) pixels
-    % would drag the local mean toward zero and inflate variance.
+    % Normalized convolution for local IEI statistics. Only observed events 
+    % contribute to the local statistics.
 
     % Weighted sum of IEI values in the neighborhood
     weighted_sum = imfilter(iei .* obs_mask, kernel, 'replicate');
@@ -120,9 +95,7 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     local_var = max(local_mean_sq - local_mean.^2, 0);  % clamp rounding noise
     local_std = sqrt(local_var);
 
-    % ----------------------------------------------------------------
-    % 3. Coefficient of Variation
-    % ----------------------------------------------------------------
+    % Coefficient of Variation
     cv_map = local_std ./ max(local_mean, eps);
 
     % Mark pixels with insufficient neighborhood data as invalid.
@@ -130,19 +103,15 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     insufficient_mask = (neighbor_count < 2) | (obs_mask == 0);
     cv_map(insufficient_mask) = Inf;  % maps to score = 0 below
 
-    % ----------------------------------------------------------------
-    % 4. Regularity score: low CV -> high score
-    % ----------------------------------------------------------------
+    % Regularity score: low CV -> high score
     % Monotonic mapping from [0, inf) to (0, 1]:
     %   CV = 0   -> score = 1.0   (perfectly uniform neighborhood)
     %   CV = 1   -> score = 0.5   (std equals mean)
     %   CV -> inf -> score -> 0   (highly irregular)
     regularity_score = 1 ./ (1 + cv_map);
 
-    % ----------------------------------------------------------------
-    % 5. IEI magnitude score: penalize very large intervals
-    % ----------------------------------------------------------------
-    % This addresses the failure mode where a pure-noise region has low CV
+    % IEI magnitude score: penalize very large intervals. This addresses 
+    % the failure mode where a pure-noise region has low CV
     % because all noise pixels fire at similarly slow rates. Such pixels
     % have large IEI values. We apply a soft penalty so that low-CV
     % regions only score well if their IEI is also reasonably small.
@@ -163,14 +132,10 @@ function [similarity_score, cv_map, regularity_map] = findSimilarities(sorted_x,
     % Inactive pixels get zero magnitude score
     magnitude_score(obs_mask == 0) = 0;
 
-    % ----------------------------------------------------------------
-    % 6. Combined regularity map
-    % ----------------------------------------------------------------
+    % Combined regularity map
     regularity_map = regularity_score .* magnitude_score;
 
-    % ----------------------------------------------------------------
-    % 7. Look up per-event scores
-    % ----------------------------------------------------------------
+    % Look up per-event scores
     linear_idx = sub2ind(imgSz, sorted_x(:), sorted_y(:));
     similarity_score = regularity_map(linear_idx);
 

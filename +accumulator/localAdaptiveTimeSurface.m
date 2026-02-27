@@ -8,6 +8,7 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_
     filter_sigma         = alts_params.filter_sigma;
     filter_size          = alts_params.filter_size;
     div_norm_exp         = alts_params.div_norm_exp;
+    symmetric_tone_scale = alts_params.symmetric_tone_scale;
 
     % Set any NaN values to 0 for computation
     t_mean(isnan(t_mean)) = 0; 
@@ -93,7 +94,8 @@ function [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_
 
     % Normalize the output frame
     normalized_output_frame = ...
-        process.symmetricToneMappingNorm(time_surface_map, 3);
+        process.symmetricToneMappingNorm(time_surface_map,...
+        symmetric_tone_scale);
 
 end
 

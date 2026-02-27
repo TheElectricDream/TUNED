@@ -7,6 +7,7 @@ function [norm_trace_map, norm_similarity_map, ...
     r_s                     = coh_params.r_s;
     trace_threshold         = coh_params.trace_threshold;
     persistence_threshold   = coh_params.persistence_threshold;
+    similarity_threshold    = coh_params.similarity_threshold;
 
     % Reset the frames for the current loop
     sum_exp_dist_map = zeros(imgSz);
@@ -40,9 +41,12 @@ function [norm_trace_map, norm_similarity_map, ...
     log_trace_map = log1p(sum_exp_dist_map'); 
     norm_trace_map = log_trace_map' ./ max(log_trace_map(:));
 
-    % % Calculate point to point similarity in the CV map
+    % Calculate point to point similarity in the CV map
     [~, ~, norm_similarity_map] = coherence.findSimilarities( ...
-    sorted_x, sorted_y, iei_map, imgSz, 10);
+    sorted_x, sorted_y, iei_map, imgSz, 2);
+    
+    % Filter out dissimilar points in the map
+    norm_similarity_map(norm_similarity_map>similarity_threshold)=nan;
 
     % Reset the background to zero for visualization purposes
     norm_similarity_map(isnan(norm_similarity_map)) = 0;
