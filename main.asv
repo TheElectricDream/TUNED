@@ -196,9 +196,9 @@ detect_harris_cv_corners       = true;
 overlay_harris_cv_corners      = true;
 
 % Harris detector parameters (see +features/detectHarrisCV.m)
-harris_cv_params.k             = 0.1;     % Harris sensitivity [0.04 - 0.15]
+harris_cv_params.k             = 0.04;     % Harris sensitivity [0.04 - 0.15]
 harris_cv_params.sigma_smooth  = 1.5;      % Gaussian integration window [px]
-harris_cv_params.threshold     = 0.0001;   % Fraction of max(R) to keep
+harris_cv_params.threshold     = 0.0001;     % Fraction of max(R) to keep
 harris_cv_params.nms_radius    = 8;        % Non-max suppression radius [px]
 harris_cv_params.max_corners   = 150;      % Max corners per frame
 harris_cv_params.border        = 10;       % Border exclusion [px]
@@ -214,8 +214,8 @@ harris_cv_desc_params.min_observed   = 0.25;   % Min observed fraction
 % MATCHING PARAMETERS
 harris_cv_match_params.ncc_threshold = 0.5;    % Min NCC to accept match
 harris_cv_match_params.ratio_test    = 1.0;    % Lowe's ratio (IJCV 2004)
-harris_cv_match_params.max_distance  = 5;     % Max displacement [px]
-harris_cv_match_params.mutual        = true;   % Symmetric matching
+harris_cv_match_params.max_distance  = 10;     % Max displacement [px]
+harris_cv_match_params.mutual        = false;   % Symmetric matching
 
 % Display control
 overlay_harris_cv_matches            = true;
@@ -254,7 +254,7 @@ harris_cv_desc_params.min_observed   = 0.25;   % Min obs fraction
 %   'harris_r' — Harris response on CV map. Corner shape in CV space.
 %   'density'  — Trace map (spatial density). Activity level.
 %
-harris_cv_desc_params.channels = {'cv', 'iei_mean', 'iei_std', 'harris_r', 'density'};
+harris_cv_desc_params.channels = {'cv', 'iei_mean', 'iei_std', 'harris_r'};
 
 % Per-channel weights (optional). Channels with higher weight
 % contribute more to the final descriptor after normalisation.
@@ -271,8 +271,7 @@ harris_cv_desc_params.channel_weights = struct( ...
     'cv',       1.0, ...
     'iei_mean', 1.0, ...
     'iei_std',  1.0, ...
-    'harris_r', 1.0, ...
-    'density', 1.0);
+    'harris_r', 1.0);
 
 %% Initialize all figure code for video output
 % Indicate which videos should be saved
@@ -575,9 +574,8 @@ for frameIndex = 1:frame_total
 
         % --- Step 1: CV map from persistent IEI (UNCHANGED) ---
         [~, cv_map_for_harris, ~] = coherence.findSimilarities( ...
-            sorted_x, sorted_y, t_mean_diff.*filter_mask, imgSz, 8);
+            sorted_x, sorted_y, iei_map, imgSz, 8);
         cv_map_for_harris(isnan(cv_map_for_harris)) = 0;
-        cv_map_for_harris(isinf(cv_map_for_harris)) = 0;
 
         % --- Step 2: Detect corners (UNCHANGED) ---
         [harris_corners, harris_R, harris_corners_sub] = ...
@@ -608,7 +606,7 @@ for frameIndex = 1:frame_total
             % Assemble channel maps
             iei_desc_maps = struct();
             iei_desc_maps.cv       = cv_map_for_harris;
-            iei_desc_maps.iei_mean = t_mean_diff.*filter_mask;
+            iei_desc_maps.iei_mean = iei_map;
             iei_desc_maps.harris_r = harris_R;
 
             % For iei_std: use t_std_diff (current-frame IEI variability)
