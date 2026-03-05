@@ -1,22 +1,26 @@
 function [] = vectorsToScatterPlot(x, y, z, holdFig)
-    
-    % Plot the Surface
-    if holdFig
-        figure(16)
-        scatter3(x, y, z, 36, z, 'filled') 
-        hold on;
-        colormap(jet); % Add a colormap to the scatter plot
-        colorbar; % Optional: Add a colorbar to indicate the color scale
-        view(3);
-        set(gca, 'FontSize', 16)
+% VECTORSTOSCATTERPLOT  3D scatter plot from raw coordinate vectors.
+%
+%   VECTORSTOSCATTERPLOT(X, Y, Z, HOLDFIG) displays a 3D scatter
+%   plot colored by z-value.
+%
+%   Inputs:
+%     x, y, z - [N x 1] Coordinate vectors.
+%     holdFig - Logical. If true, overlay on existing figure 16.
+%
+%   See also: plot.mapToScatterPlot
 
+    if holdFig
+        figure(16);
+        hold on;
     else
-        figure()
-        scatter3(x, y, z, 36, z, 'filled') 
-        colormap(jet); % Add a colormap to the scatter plot
-        colorbar; % Optional: Add a colorbar to indicate the color scale
-        view(3);
-        set(gca, 'FontSize', 16)
+        figure();
     end
+
+    scatter3(x, y, z, 36, z, 'filled');
+    colormap(jet);
+    colorbar;
+    view(3);
+    set(gca, 'FontSize', 16);
 
 end

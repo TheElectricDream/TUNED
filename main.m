@@ -2,41 +2,29 @@ clear;
 clc;
 close all;
 
-%% Processing pipeline reminder
-% To import AEDAT4 -->
-% /home/alexandercrain/Repositories/CNN/import/importAEDAT4toHDF5.py
-
-% All datasets --> /home/alexandercrain/Dropbox/Graduate Documents/
-% Doctor of Philosophy/Thesis Research/Datasets/SPOT
-
-% Datasets for MATLAB --> /home/alexandercrain/Dropbox/Graduate Documents/
-% Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5
-
-% Notes:
-% - Look into kriging interpolation
-
 %% Define processing range
 % Define start and end time to process [seconds]
 t_start_process = 80; 
-t_end_process   = 1000; 
+t_end_process   = 100; 
 
 %% Import events for inspection
 
 % Set path to datasets
-hdf5_path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
+hdf5Path = ['/home/alexandercrain/Dropbox/Graduate Documents' ...
     '/Doctor of Philosophy/Thesis Research/Datasets/SPOT/HDF5/'];
+videoOutPath = '/home/alexandercrain/Videos/Research/';
 
 % Set dataset name
-%file_name = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
-file_name = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
-%file_name = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
-%file_name = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
+fileName = 'recording_20260127_145247.hdf5';  % Jack W. (LED Cont)
+%fileName = 'recording_20251029_131131.hdf5';  % EVOS - NOM - ROT
+%fileName = 'recording_20251029_135047.hdf5';  % EVOS - SG - ROT
+%fileName = 'recording_20251029_134602.hdf5';  % EVOS - DARK - ROT
 
 % Load the data
-tk = double(h5read([hdf5_path file_name], '/timestamp'));
-xk = single(h5read([hdf5_path file_name], '/x'));
-yk = single(h5read([hdf5_path file_name], '/y'));
-pk = single(h5read([hdf5_path file_name], '/polarity'));
+tk = double(h5read([hdf5Path fileName], '/timestamp'));
+xk = single(h5read([hdf5Path fileName], '/x'));
+yk = single(h5read([hdf5Path fileName], '/y'));
+pk = single(h5read([hdf5Path fileName], '/polarity'));
 
 % Convert time to seconds
 tk = (tk - tk(1))/1e6;
@@ -60,7 +48,7 @@ tk = tk - t_start_process;
 % Clear unused variables for memory
 clearvars valid_idx;
 
-%% Initialize all tunable parameters for frame generation & filtering
+%% Initialize all tunable parameters for the algorithms
 % GENERAL PARAMETERS
 % ------------------
 % Set the image size
@@ -88,8 +76,8 @@ iei_map                     = zeros(imgSz);
 coh_params.r_s                         = 30/imgSz(1);  % spatial radius [pixels norm]
 coh_params.trace_threshold             = 1.3;
 coh_params.persistence_threshold       = 0.0002;
-coh_params.coherence_threshold         = 0.0001;
-coh_params.similarity_threshold        = 0.7;
+coh_params.coherence_threshold         = 0.06;
+coh_params.similarity_threshold        = 0.5;
 
 % Initialize mask for filter
 filter_mask                 = ones(imgSz);
@@ -149,6 +137,24 @@ agd_state.last_update_time = t_start_process;
 agd_params.alpha   = 0.001;   % Smoothing factor for activity 
 agd_params.K       = 5000000.0;  % Scaling factor (Controls "memory length")
 agd_activity_store = zeros(length(frame_total),1);
+
+% MOTION-ENCODED TIME-SURFACE (METS) PARAMETERS
+% ----------------------------------------------
+% REF: Xu et al., "METS: Motion-Encoded Time-Surface for Event-Based
+%      High-Speed Pose Tracking," IJCV, vol. 133, pp. 4401-4419, 2025.
+%      DOI: 10.1007/s11263-025-02379-6
+% ----------------------------------------------
+% State: polarity-separated timestamp maps (Eq. 4)
+mets_state.t_last_pos = zeros(imgSz);   % Last event timestamp, positive polarity
+mets_state.t_last_neg = zeros(imgSz);   % Last event timestamp, negative polarity
+mets_state.t_last_any = zeros(imgSz);   % Last event timestamp, either polarity
+mets_state.p_last     = zeros(imgSz);   % Polarity of last event at each pixel
+
+% Parameters (Section 3.3 of the paper — identical to their defaults)
+mets_params.R    = 4;    % Observation window half-size [pixels]
+mets_params.n    = 3;    % Velocity estimation range [pixels]
+mets_params.d    = 5;    % Decay step [pixels]
+mets_params.d_th = 8;    % Decay distance threshold [pixels]
 
 %% Initialize all tunable parameters for feature detection algorithms
 % ARC* CORNER DETECTION PARAMETERS
@@ -281,7 +287,7 @@ atsOut = true;
 
 % Initialize the videos
 [hFigs, hAxs, hImgs, videoWriters] = plot.initializeEventVideos(cohOut,...
-    atsOut, imgSz);
+    atsOut, imgSz, videoOutPath);
 
 %% Initialize data storage and perform data optimizations
 % Identify number of events
@@ -441,134 +447,7 @@ for frameIndex = 1:frame_total
     %     end
     % end
 
-    % ------------------- HARRIS-CV CORNER DETECTION --------------------%
-    % -------------------------------------------------------------------%
-
-    % if detect_harris_cv_corners
-    % 
-    %     % Compute the CV map from the persistent IEI map.
-    %     % We call findSimilarities directly rather than extracting
-    %     % the CV map from computeCoherenceMask, because:
-    %     %   (a) computeCoherenceMask uses t_mean_diff (current-frame IEI)
-    %     %       for coherence scoring, but we want the smoothed iei_map
-    %     %       for corner detection (more stable statistics).
-    %     %   (b) This avoids modifying the coherence pipeline.
-    %     %
-    %     % The radius here controls the spatial scale of the CV
-    %     % computation. Using a slightly larger radius (6-10) than the
-    %     % default (4) gives smoother CV fields that produce cleaner
-    %     % Harris gradients.
-    %     [~, cv_map_for_harris, ~] = coherence.findSimilarities( ...
-    %         sorted_x, sorted_y, t_mean_diff.*filter_mask, imgSz, 8);
-    % 
-    %     % Replace NaN (unobserved pixels) with 0
-    %     cv_map_for_harris(isnan(cv_map_for_harris)) = 0;
-    %     cv_map_for_harris(isinf(cv_map_for_harris)) = 0;
-    % 
-    %     % Run Harris on the CV map
-    %     [harris_corners, harris_R, harris_corners_sub] = ...
-    %         features.detectHarrisCV(cv_map_for_harris, ...
-    %         'k',            harris_cv_params.k, ...
-    %         'sigma_smooth', harris_cv_params.sigma_smooth, ...
-    %         'threshold',    harris_cv_params.threshold, ...
-    %         'nms_radius',   harris_cv_params.nms_radius, ...
-    %         'max_corners',  harris_cv_params.max_corners, ...
-    %         'border',       harris_cv_params.border);
-    % 
-    %     % Store for post-processing (optional)
-    %     harris_cv_storage{frameIndex} = harris_corners;
-    % 
-    %     % Report
-    %     if ~isempty(harris_corners)
-    %         fprintf('  Harris-CV: %d corners detected\n', ...
-    %             size(harris_corners, 1));
-    %     end
-    % 
-    % end
-
     % ------------------- HARRIS-CV DETECTION + MATCHING ----------------%
-    % -------------------------------------------------------------------%
-
-    % if detect_harris_cv_corners
-    % 
-    %     % --- CV map from persistent IEI ---
-    %     [~, cv_map_for_harris, ~] = coherence.findSimilarities( ...
-    %         sorted_x, sorted_y, t_mean_diff.*filter_mask, imgSz, 8);
-    %     cv_map_for_harris(isnan(cv_map_for_harris)) = 0;
-    %     cv_map_for_harris(isinf(cv_map_for_harris)) = 0;
-    % 
-    %     % --- Detect corners (Level 1) ---
-    %     [harris_corners, harris_R, harris_corners_sub] = ...
-    %         features.detectHarrisCV(cv_map_for_harris, ...
-    %         'k',            harris_cv_params.k, ...
-    %         'sigma_smooth', harris_cv_params.sigma_smooth, ...
-    %         'threshold',    harris_cv_params.threshold, ...
-    %         'nms_radius',   harris_cv_params.nms_radius, ...
-    %         'max_corners',  harris_cv_params.max_corners, ...
-    %         'border',       harris_cv_params.border);
-    % 
-    %     harris_cv_storage{frameIndex} = harris_corners;
-    % 
-    %     % --- Extract descriptors (Level 2) ---
-    %     if ~isempty(harris_corners_sub)
-    %         [desc_curr, corners_curr_valid] = ...
-    %             features.extractCVDescriptors(cv_map_for_harris, ...
-    %             harris_corners_sub, ...
-    %             'half_size',    harris_cv_desc_params.half_size, ...
-    %             'sigma_weight', harris_cv_desc_params.sigma_weight, ...
-    %             'min_observed', harris_cv_desc_params.min_observed);
-    %     else
-    %         desc_curr = [];
-    %         corners_curr_valid = zeros(0, 2);
-    %     end
-    % 
-    %     % --- Match to previous frame (Level 2) ---
-    %     harris_cv_matches = zeros(0, 2);
-    %     harris_cv_scores  = zeros(0, 1);
-    % 
-    %     if ~isempty(desc_curr) && ~isempty(desc_prev_frame)
-    %         [harris_cv_matches, harris_cv_scores] = ...
-    %             features.matchCVDescriptors( ...
-    %             desc_curr, corners_curr_valid, ...
-    %             desc_prev_frame, corners_prev_frame, ...
-    %             'ncc_threshold', harris_cv_match_params.ncc_threshold, ...
-    %             'ratio_test',    harris_cv_match_params.ratio_test, ...
-    %             'max_distance',  harris_cv_match_params.max_distance, ...
-    %             'mutual',        harris_cv_match_params.mutual);
-    %     end
-    % 
-    %     % Store for post-processing
-    %     harris_cv_match_storage{frameIndex} = struct( ...
-    %         'matches', harris_cv_matches, ...
-    %         'scores',  harris_cv_scores, ...
-    %         'corners_curr', corners_curr_valid, ...
-    %         'corners_prev', corners_prev_frame);
-    % 
-    %     % Save previous-frame state for display BEFORE overwriting
-    %     corners_prev_frame_for_display = corners_prev_frame;
-    % 
-    %     % Update previous-frame state
-    %     desc_prev_frame    = desc_curr;
-    %     corners_prev_frame = corners_curr_valid;
-    % 
-    %     % Report
-    %     n_det = size(corners_curr_valid, 1);
-    %     n_match = size(harris_cv_matches, 1);
-    %     if n_match > 0
-    %         fprintf('  Harris-CV: %d det, %d matched (NCC: %.3f)\n', ...
-    %             n_det, n_match, mean(harris_cv_scores));
-    %     elseif n_det > 0
-    %         fprintf('  Harris-CV: %d det, 0 matched\n', n_det);
-    %     end
-    % 
-    %     if ~isempty(harris_corners)
-    %         fprintf('  Harris-CV: %d corners detected\n', ...
-    %             size(harris_corners, 1));
-    %     end
-    % 
-    % end
-
-        % ------------------- HARRIS-CV DETECTION + MATCHING ----------------%
     % -------------------------------------------------------------------%
 
     if detect_harris_cv_corners
@@ -680,13 +559,11 @@ for frameIndex = 1:frame_total
 
     end
 
-
     % -------------- ADAPTIVE LOCAL TIME-SURFACE UPDATE ------------------%
     % --------------------------------------------------------------------%
     
     % Accumulate polarity into a 2D grid
-    % If multiple events land on one pixel, we sum their polarities
-    % (e.g., +1 +1 -1 = +1)
+    % If multiple events land on one pixel, we sum their polarities (e.g., +1 +1 -1 = +1)
     polarity_map = accumarray([sorted_x, sorted_y], p_signed, imgSz, @sum, 0);
 
     [normalized_output_frame, time_surface_map_raw, tau_filtered, adaptive_gains] = ...
@@ -696,41 +573,16 @@ for frameIndex = 1:frame_total
     % Set any retention variables
     time_surface_map_prev = time_surface_map_raw;
 
+    % -------------------------- DATA EXPORT -----------------------------%
+    % --------------------------------------------------------------------%
+    
+    % Store the processed frames for later use
+    alts_frame_storage{frameIndex} = normalized_output_frame;
+
     % Store the adaptive map score
-    alts_activity_score.mean(frameIndex) = ...
-        mean(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.median(frameIndex) = ...
-        median(adaptive_gains(abs(adaptive_gains)>0));
-    alts_activity_score.std(frameIndex) = ...
-        std(adaptive_gains(abs(adaptive_gains)>0));
-
-    % ----------------- NUNES GLOBAL ADAPTIVE ACCUMULATION----------------%
-    % --------------------------------------------------------------------%
-    
-    % % Run the AGD algorithm
-    % [agd_surface, agd_state, ~] = accumulator.adaptiveGlobalDecay(agd_surface,...
-    %     sorted_x, sorted_y, sorted_t, agd_state, agd_params);
-    % 
-    % % Store the surface into the standard normalized frame
-    % normalized_output_frame = agd_surface;
-    % 
-    % % Store activity data for later inspection
-    % agd_activity_store(frameIndex) = agd_state.activity;
-
-    % --------------------- TIME-SURFACE ACCUMULATION --------------------%
-    % --------------------------------------------------------------------%
-    
-    % % Run the normal time-surface accumulation algorithm
-    % [ts_t_map, normalized_output_frame] = accumulator.timeSurface(ts_t_map,...
-    %  sorted_x, sorted_y, sorted_t, imgSz, ts_time_constant);
-
-    % ---------- SPEED INVARIENT TIME-SURFACE ACCUMULATION ---------------%
-    % --------------------------------------------------------------------%
-    
-    % % Run the speed invarient time-surface accumulation algorithm
-    % [sits_t_map, normalized_output_frame] = ...
-    %     accumulator.speedInvariantTimeSurface(sits_t_map, sorted_x,...
-    %     sorted_y, sits_R);
+    alts_activity_score.mean(frameIndex) = mean(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.median(frameIndex) = median(adaptive_gains(abs(adaptive_gains)>0));
+    alts_activity_score.std(frameIndex) = std(adaptive_gains(abs(adaptive_gains)>0));
 
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
@@ -768,94 +620,10 @@ for frameIndex = 1:frame_total
     % Log processing time
     frame_time(frameIndex) = toc;
 
-    % if atsOut
-    %     % Transpose to display orientation (H x W)
-    %     display_frame = grayscale_normalized_output_frame';
-    % 
-    %     % Overlay Arc* corner markers if enabled
-    %     if overlay_arc_star_corners && detect_arc_star_corners ...
-    %             && ~isempty(corner_events_storage{frameIndex})
-    %         if exist('marker_opts', 'var')
-    %             display_frame = plot.overlayCornerMarkers(...
-    %                 display_frame, corner_events_storage{frameIndex}, ...
-    %                 marker_opts);
-    %         else
-    %             display_frame = plot.overlayCornerMarkers(...
-    %                 display_frame, corner_events_storage{frameIndex});
-    %         end
-    %     end
-    % 
-    %     % Overlay Harris-CV corner markers if enabled
-    %     if overlay_harris_cv_corners && detect_harris_cv_corners ...
-    %             && exist('harris_corners_sub', 'var') ...
-    %             && ~isempty(harris_corners_sub)
-    %         display_frame = plot.overlayHarrisCVMarkers(...
-    %             display_frame, harris_corners_sub);
-    %     end
-    % 
-    %     % Overlay Harris-CV match lines
-    %     if overlay_harris_cv_matches && detect_harris_cv_corners ...
-    %             && exist('harris_cv_matches', 'var') ...
-    %             && ~isempty(harris_cv_matches) ...
-    %             && ~isempty(corners_prev_frame_for_display)
-    %         display_frame = plot.overlayMatchedCorners( ...
-    %             display_frame, ...
-    %             corners_curr_valid, ...
-    %             corners_prev_frame_for_display, ...
-    %             harris_cv_matches, ...
-    %             harris_cv_scores);
-    %     end
-    % 
-    %     % Capture the frame for the video writer
-    %     set(hImgs{1}, 'CData', display_frame);
-    %     set(hImgs{1}, 'AlphaData', ...
-    %         ~isnan(grayscale_normalized_output_frame'));
-    %     set(hAxs{1}, 'Visible','off');
-    %     colormap(gray);
-    %     clim([0 255]);
-    %     writeVideo(videoWriters{1}, display_frame);
-    % 
-    %     frameOutputFolder = '/home/alexandercrain/Videos/output_frames';
-    %     if ~exist(frameOutputFolder, 'dir')
-    %         mkdir(frameOutputFolder);
-    %     end
-    %     fname = fullfile(frameOutputFolder, sprintf('frame_%05d.png', frameIndex));
-    %     imwrite(display_frame, fname);
-    % end
-
     % Print progress
     stats.printPercentComplete(frameIndex, frame_total, frame_time(frameIndex));
 
 end
-
-% Concatenate all detected corner events into a single array
-if detect_arc_star_corners
-    all_corner_events = vertcat(corner_events_storage{:});
-    fprintf('\nArc* total: %d corner events detected.\n', ...
-        size(all_corner_events, 1));
-    % Columns: [x, y, t, polarity]
-end
-
-if detect_harris_cv_corners
-    total_matches = 0;
-    all_ncc = [];
-    for fi = 1:frame_total
-        if ~isempty(harris_cv_match_storage{fi})
-            ms = harris_cv_match_storage{fi};
-            total_matches = total_matches + size(ms.matches, 1);
-            all_ncc = [all_ncc; ms.scores]; %#ok<AGROW>
-        end
-    end
-    fprintf('\n=== Harris-CV Level 2 Summary ===\n');
-    fprintf('Total matches: %d across %d frames (%.1f/frame)\n', ...
-        total_matches, frame_total, total_matches / frame_total);
-    if ~isempty(all_ncc)
-        fprintf('NCC: mean=%.3f  std=%.3f  [%.3f, %.3f]\n', ...
-            mean(all_ncc), std(all_ncc), min(all_ncc), max(all_ncc));
-    end
-end
-
-
 
 % Close the video writer
 for videosIdx = 1:length(videoWriters)
