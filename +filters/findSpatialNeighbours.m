@@ -65,7 +65,7 @@ function [neighbor_db, D] = findSpatialNeighbours(...
     points3D = [x_norm, y_norm, t_norm];
 
     tree = createns(points3D, 'NSMethod', 'kdtree', ...
-        'Distance', 'euclidean', 'BucketSize', 50);
+        'Distance', 'euclidean', 'BucketSize', 200);
 
     % ----------------------------------------------------------------
     % 2. Radius search

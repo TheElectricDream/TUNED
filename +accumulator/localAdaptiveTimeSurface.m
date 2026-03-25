@@ -107,13 +107,13 @@ function [normalized_output_frame, time_surface_map_raw, ...
 
     % Morphological dilation bridges sub-pixel gaps without the
     % amplitude amplification that Gaussian blur would cause.
-    se = strel('disk', 1);
+    se = strel('disk', 2);
     activity_blurred = imdilate(activity_indicator, se);
 
     % ----------------------------------------------------------------
     % 3. Asymmetric attack-release envelope
     % ----------------------------------------------------------------
-    tau_effective = tau_active .* activity_blurred + ...
+    tau_effective = tau_filtered .* activity_blurred + ...
                     surface_tau_release .* (1 - activity_blurred);
 
     % ----------------------------------------------------------------
@@ -158,27 +158,14 @@ function [normalized_output_frame, time_surface_map_raw, ...
         (sigma + counts_smooth(good_mask) .^ div_norm_exp);
 
     % ----------------------------------------------------------------
-    % 7. Outlier rejection
+    % 7. Outlier rejection (iterative 2-pass sigma clipping)
     % ----------------------------------------------------------------
-    mean_value_pos = mean(time_surface_map(time_surface_map > 0));
-    mean_value_neg = mean(time_surface_map(time_surface_map < 0));
-    std_value_pos  = std(time_surface_map(time_surface_map > 0));
-    std_value_neg  = std(time_surface_map(time_surface_map < 0));
-
-    pos_threshold = mean_value_pos + 4 * std_value_pos;
-    neg_threshold = mean_value_neg - 4 * std_value_neg;
-
-    % Clamp outliers to the median of their polarity
-    med_pos = median(time_surface_map(time_surface_map > 0));
-    med_neg = median(time_surface_map(time_surface_map < 0));
-
-    time_surface_map(time_surface_map > pos_threshold) = med_pos;
-    time_surface_map(time_surface_map < neg_threshold) = med_neg;
-
-    time_surface_map_raw(time_surface_map > pos_threshold) = ...
-        median(time_surface_map_raw(time_surface_map > 0));
-    time_surface_map_raw(time_surface_map < neg_threshold) = ...
-        median(time_surface_map_raw(time_surface_map < 0));
+    for i = 1:10
+        [time_surface_map, time_surface_map_raw] = ...
+            stats.rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
+    end
+    % [time_surface_map, time_surface_map_raw] = ...
+    %     rejectPolarityOutliers(time_surface_map, time_surface_map_raw, 2);
 
     % ----------------------------------------------------------------
     % 8. Tone mapping for display
@@ -190,3 +177,4 @@ function [normalized_output_frame, time_surface_map_raw, ...
         symmetric_tone_scale);
 
 end
+

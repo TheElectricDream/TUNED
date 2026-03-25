@@ -52,8 +52,7 @@ function [hFigs, hAxs, hImgs, videoWriters] = ...
         hImgATS = imagesc(hAxATS, initial_data);
         set(hImgATS, 'AlphaData', ~isnan(initial_data));
 
-        videoFileName = fullfile(videoOutPath, ...
-            'adaptive_time_surface_accumulator.avi');
+        videoFileName = fullfile(videoOutPath);
         videoWriters{1} = VideoWriter(videoFileName);
         videoWriters{1}.FrameRate = 60;
         open(videoWriters{1});
