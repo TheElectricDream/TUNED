@@ -18,7 +18,7 @@ filterSelection = 'COH';
 accumulatorSelection = 'IEI-ATS';
 
 % Set feature detector
-% Options: 'ARC-S', 'HARRIS-CV'
+% Options: 'ARC-S'
 featureSelection = 'ARC-S';
 
 %% Define processing range
@@ -689,6 +689,9 @@ marker_opts.thickness = 1;
 % Storage for detected corner events across all frames
 corner_events_storage = cell(frame_total, 1);
 
+% Flag to indicate if the algorithm is a detector AND/OR a tracker
+arc_star_pipeline_mode     = 'detect';   % 'detect' | 'track'
+
 % HARRIS-CV CORNER DETECTION PARAMETERS
 % --------------------------------------
 % Boolean: enable/disable Harris-CV detection
@@ -775,7 +778,7 @@ harris_cv_desc_params.channel_weights = struct( ...
 % Indicate which videos should be saved
 cohOut = false;
 atsOut = true;
-debugFeatureViewer = false;
+debug_feature_viewer = true;
 
 % Initialize the videos
 [hFigs, hAxs, hImgs, videoWriters] = plot.initializeEventVideos(cohOut,...
@@ -1172,6 +1175,9 @@ for frameIndex = 1:frame_total
 
         % ---------------------- ARC* CORNER DETECTION -------------------%
         % ----------------------------------------------------------------%
+
+        % Arc* processes events in temporal order (not pixel-sorted order)
+        % so we pass the original slice outputs directly.
         [corner_events_frame, sae_state] = features.detectArcStarCorners(...
             x_valid, y_valid, t_valid, p_valid, imgSz, ...
             sae_state, arc_star_params);
@@ -1179,27 +1185,25 @@ for frameIndex = 1:frame_total
         % Store corner events for this frame
         corner_events_storage{frameIndex} = corner_events_frame;
 
+        % Report detection rate
+        if ~isempty(corner_events_frame)
+            n_events_frame = numel(t_valid);
+            n_corners_frame = size(corner_events_frame, 1);
+            corner_pct = 100 * n_corners_frame / n_events_frame;
+            fprintf('  Arc*: %d corners / %d events (%.1f%%)\n', ...
+                n_corners_frame, n_events_frame, corner_pct);
+        end
+
         if ~isempty(corner_events_frame)
             arc_corners_rc = corner_events_frame(:, 1:2);
         else
             arc_corners_rc = zeros(0, 2);
         end
 
-        % Set debugging parameters
-        algorithm_mode   = 'detect';
-        algorithm_name   = 'Arc*';
-        figure_tag       = 'ArcStarDebugViewer';
-        debug_corners    = arc_corners_rc;
-        frame_prev       = [];
-        corners_prev     = [];
-        matches          = [];
-        scores           = [];
-        score_label      = '';
-
     elseif strcmp(featureSelection, 'HARRIS-CV') == 1
 
-        % ------------------- HARRIS-CV DETECTION + MATCHING -------------%
-        % ----------------------------------------------------------------%
+        % ------------------- HARRIS-CV DETECTION + MATCHING ----------------%
+        % -------------------------------------------------------------------%
   
         % --- Step 1: CV map from persistent IEI (UNCHANGED) ---
         % [~, cv_map_for_harris, ~] = filters.findSimilarities( ...
@@ -1220,7 +1224,18 @@ for frameIndex = 1:frame_total
 
         harris_cv_storage{frameIndex} = harris_corners;
 
-        % --- Step 3: Extract MULTI-CHANNEL descriptors ---
+        % --- Step 3: Extract MULTI-CHANNEL descriptors (CHANGED) ---
+        %
+        %  Build the maps struct from data already computed earlier
+        %  in this loop iteration. All of these variables exist by
+        %  this point in the pipeline:
+        %
+        %    cv_map_for_harris  — computed in Step 1 above
+        %    iei_map            — persistent EMA, updated before coherence
+        %    t_std_diff         — from stats.computeNeighborhoodStats
+        %    harris_R           — from Step 2 above
+        %    norm_trace_map     — from coherence.computeCoherenceMask
+        %
         if ~isempty(harris_corners_sub)
 
             % Assemble channel maps
@@ -1296,17 +1311,6 @@ for frameIndex = 1:frame_total
                 d_dim, n_det);
         end
 
-        % Set debugging parameters
-        algorithm_mode   = 'track';
-        algorithm_name   = 'Harris-CV';
-        figure_tag       = 'HarrisCVDebugViewer';
-        debug_corners    = corners_curr_valid;
-        frame_prev       = debug_prev_frame;
-        corners_prev     = corners_prev_frame_for_display;
-        matches          = harris_cv_matches;
-        scores           = harris_cv_scores;
-        score_label      = 'NCC';
-
     else
 
 
@@ -1381,7 +1385,6 @@ for frameIndex = 1:frame_total
         metrics.computeClarkEvans(metrics_foreground_map);
     frame_metrics(frameIndex).ComputeTimeFilter = filtering_stop;
     frame_metrics(frameIndex).ComputeTimeAccumulator = accumulator_stop;
-    frame_metrics(frameIndex).ComputeTimeFeatures = feature_stop;
     frame_metrics(frameIndex).EventsInFrame = metrics_n_total;
     frame_metrics(frameIndex).FilteredEvents = ...
         metrics_n_total-metrics_n_passed;
@@ -1396,22 +1399,7 @@ for frameIndex = 1:frame_total
     % ------------------------ EXPORTING VIDEO ---------------------------%
     % --------------------------------------------------------------------%
         
-    if debugFeatureViewer
-        plot.debugFeatureViewer( ...
-            normalized_output_frame, ...
-            debug_corners, ...
-            frameIndex, ...
-            'mode',           algorithm_mode, ...
-            'algorithm_name', algorithm_name, ...
-            'fig_tag',        figure_tag, ...
-            'frame_prev',     frame_prev, ...
-            'corners_prev',   corners_prev, ...
-            'matches',        matches, ...
-            'scores',         scores, ...
-            'score_label',    score_label);
-
-        debug_prev_frame = normalized_output_frame;
-    end
+    if 
 
     % Convert to uint8 (0-255 range)
     grayscale_normalized_output_frame = ...
@@ -1445,8 +1433,7 @@ for frameIndex = 1:frame_total
     % Print progress
     stats.printPercentComplete(frameIndex, frame_total, ...
         frame_metrics(frameIndex).ComputeTimeFilter, ...
-        frame_metrics(frameIndex).ComputeTimeAccumulator, ...
-        frame_metrics(frameIndex).ComputeTimeFeatures);
+        frame_metrics(frameIndex).ComputeTimeAccumulator);
 
 end
 
